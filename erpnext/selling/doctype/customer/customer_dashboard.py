@@ -9,7 +9,7 @@ def get_data():
 		'heatmap_message': _('This is based on transactions against this Customer. See timeline below for details'),
 		'fieldname': 'customer',
 		'non_standard_fieldnames': {
-			'Payment Entry': 'party',
+			'Collection Entry': 'party',
 			'Quotation': 'party_name',
 			'Opportunity': 'party_name',
 			'Bank Account': 'party',
@@ -29,7 +29,7 @@ def get_data():
 			},
 			{
 				'label': _('Payments'),
-				'items': ['Payment Entry', 'Bank Account']
+				'items': ['Collection Entry', 'Bank Account']
 			},
 			{
 				'label': _('Support'),

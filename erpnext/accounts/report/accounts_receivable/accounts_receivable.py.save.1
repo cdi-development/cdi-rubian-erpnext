@@ -429,14 +429,14 @@ class ReceivablePayableReport(object):
 	def get_future_payments(self):
 		if self.filters.show_future_payments:
 			self.future_payments = frappe._dict()
-			future_payments = list(self.get_future_payments_from_payment_entry())
+			future_payments = list(self.get_future_payments_from_collection_entry())
 			future_payments += list(self.get_future_payments_from_journal_entry())
 			if future_payments:
 				for d in future_payments:
 					if d.future_amount and d.invoice_no:
 						self.future_payments.setdefault((d.invoice_no, d.party), []).append(d)
 
-	def get_future_payments_from_payment_entry(self):
+	def get_future_payments_from_collection_entry(self):
 		return frappe.db.sql("""
 			select
 				ref.reference_name as invoice_no,

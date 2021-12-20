@@ -614,7 +614,7 @@ frappe.ui.form.on('Sales Invoice', {
 			'Delivery Note': 'Delivery',
 			'Sales Invoice': 'Return / Credit Note',
 			'Payment Request': 'Payment Request',
-			'Payment Entry': 'Payment'
+			'Collection Entry': 'Collection'
 		},
 		frm.fields_dict["timesheets"].grid.get_field("time_sheet").get_query = function(doc, cdt, cdn){
 			return{

@@ -429,14 +429,14 @@ class ReceivablePayableReport(object):
 	def get_future_payments(self):
 		if self.filters.show_future_payments:
 			self.future_payments = frappe._dict()
-			future_payments = list(self.get_future_payments_from_payment_entry())
+			future_payments = list(self.get_future_payments_from_collection_entry())
 			future_payments += list(self.get_future_payments_from_journal_entry())
 			if future_payments:
 				for d in future_payments:
 					if d.future_amount and d.invoice_no:
 						self.future_payments.setdefault((d.invoice_no, d.party), []).append(d)
 
-	def get_future_payments_from_payment_entry(self):
+	def get_future_payments_from_collection_entry(self):
 		return frappe.db.sql("""
 			select
 				ref.reference_name as invoice_no,
@@ -571,267 +571,118 @@ class ReceivablePayableReport(object):
 			date_condition = "AND posting_date <=%s"
 
 		if self.filters.get(scrub(self.party_type)):
-			select_fields = "debit_in_account_currency as debit, credit_in_account_currency as credit"
+			select_fields = "debit_in_account_currency as debit, credit_in_ac - jea.credit_in_account_currency"
+				if self.party_type == 'Supplier' else "jea.credit_in_account_currency - jea.debit_in_account_currency")
 		else:
-			select_fields = "debit, credit"
+			amount_field = ("jea.debit - " if self.party_type == 'Supplier' else "jea.credit")
 
-		self.gl_entries = frappe.db.sql("""
+		return frappe.db.sql("""
 			select
-				name, posting_date, account, party_type, party, voucher_type, voucher_no, cost_center,
-				against_voucher_type, against_voucher, account_currency, {0}
+				jea.reference_name as invoice_no,
+				jea.party,
+				jea.party_type,
+				je.posting_date as future_date,
+				sum({0}) as future_amount,
+				je.cheque_no as future_ref
 			from
-				`tabGL Entry`
+				`tabJournal Entry` as je inner join `tabJournal Entry Account` as jea
+			on
+				(jea.parent = je.name)
 			where
-				docstatus < 2
-				and is_cancelled = 0
-				and party_type=%s
-				and (party is not null and party != '')
-				{1} {2} {3}"""
-			.format(select_fields, date_condition, conditions, order_by), values, as_dict=True)
+				je.docstatus < 2
+				and je.posting_date > %s
+				and jea.party_type = %s
+				and jea.reference_name is not null and jea.reference_name != ''
+			group by je.name, jea.reference_name
+			having future_amount > 0
+			""".format(amount_field), (self.filters.report_date, self.party_type), as_dict=1)
 
-	def get_sales_invoices_or_customers_based_on_sales_person(self):
-		if self.filters.get("sales_person"):
-			lft, rgt = frappe.db.get_value("Sales Person",
-				self.filters.get("sales_person"), ["lft", "rgt"])
+	def allocate_future_payments(self, row):
+		# future payments are captured in additional columns
+		# this method allocates pending future payments against a voucher to
+		# the current row (which could be generated from payment terms)
+		if not self.filters.show_future_payments:
+			return
 
-			records = frappe.db.sql("""
-				select distinct parent, parenttype
-				from `tabSales Team` steam
-				where parenttype in ('Customer', 'Sales Invoice')
-					and exists(select name from `tabSales Person` where lft >= %s and rgt <= %s and name = steam.sales_person)
-			""", (lft, rgt), as_dict=1)
+		row.remaining_balance = row.outstanding
+		row.future_amount = 0.0
+		for future in self.future_payments.get((row.voucher_no, row.party), []):
+			if row.remaining_balance > 0 and future.future_amount:
+				if future.future_amount > row.outstanding:
+					row.future_amount = row.outstanding
+					future.future_amount = future.future_amount - row.outstanding
+					row.remaining_balance = 0
+				else:
+					row.future_amount += future.future_amount
+					future.future_amount = 0
+					row.remaining_balance = row.outstanding - row.future_amount
 
-			self.sales_person_records = frappe._dict()
-			for d in records:
-				self.sales_person_records.setdefault(d.parenttype, set()).add(d.parent)
+				row.setdefault('future_ref', []).append(cstr(future.future_ref) + '/' + cstr(future.future_date))
 
-	def prepare_conditions(self):
-		conditions = [""]
-		values = [self.party_type, self.filters.report_date]
-		party_type_field = scrub(self.party_type)
+		if row.future_ref:
+			row.future_ref = ', '.join(row.future_ref)
 
-		self.add_common_filters(conditions, values, party_type_field)
+	def get_return_entries(self):
+		doctype = "Sales Invoice" if self.party_type == "Customer" else "Purchase Invoice"
+		filters={
+			'is_return': 1,
+			'docstatus': 1
+		}
+		party_field = scrub(self.filters.party_type)
+		if self.filters.get(party_field):
+			filters.update({party_field: self.filters.get(party_field)})
+		self.return_entries = frappe._dict(
+			frappe.get_all(doctype, filters, ['name', 'return_against'], as_list=1)
+		)
 
-		if party_type_field=="customer":
-			self.add_customer_filters(conditions, values)
-
-		elif party_type_field=="supplier":
-			self.add_supplier_filters(conditions, values)
-
-		if self.filters.cost_center:
-			self.get_cost_center_conditions(conditions)
-
-		self.add_accounting_dimensions_filters(conditions, values)
-		return " and ".join(conditions), values
-
-	def get_cost_center_conditions(self, conditions):
-		lft, rgt = frappe.db.get_value("Cost Center", self.filters.cost_center, ["lft", "rgt"])
-		cost_center_list = [center.name for center in frappe.get_list("Cost Center", filters = {'lft': (">=", lft), 'rgt': ("<=", rgt)})]
-
-		cost_center_string = '", "'.join(cost_center_list)
-		conditions.append('cost_center in ("{0}")'.format(cost_center_string))
-
-	def get_order_by_condition(self):
-		if self.filters.get('group_by_party'):
-			return "order by party, posting_date"
+	def set_ageing(self, row):
+		if self.filters.ageing_based_on == "Due Date":
+			entry_date = row.due_date
+		elif self.filters.ageing_based_on == "Supplier Invoice Date":
+			entry_date = row.bill_date
 		else:
-			return "order by posting_date, party"
+			entry_date = row.posting_date
 
-	def add_common_filters(self, conditions, values, party_type_field):
-		if self.filters.company:
-			conditions.append("company=%s")
-			values.append(self.filters.company)
+		self.get_ageing_data(entry_date, row)
 
-		if self.filters.finance_book:
-			conditions.append("ifnull(finance_book, '') in (%s, '')")
-			values.append(self.filters.finance_book)
+		# ageing buckets should not have amounts if due date is not reached
+		if getdate(entry_date) > getdate(self.filters.report_date):
+			row.range1 = row.range2 = row.range3 = row.range4 = row.range5 = 0.0
 
-		if self.filters.get(party_type_field):
-			conditions.append("party=%s")
-			values.append(self.filters.get(party_type_field))
+	def get_ageing_data(self, entry_date, row):
+		# [0-30, 30-60, 60-90, 90-120, 120-above]
+		row.range1 = row.range2 = row.range3 = row.range4 = row.range5 = 0.0
 
-		# get GL with "receivable" or "payable" account_type
-		account_type = "Receivable" if self.party_type == "Customer" else "Payable"
-		accounts = [d.name for d in frappe.get_all("Account",
-			filters={"account_type": account_type, "company": self.filters.company})]
+		if not (self.age_as_on and entry_date):
+			return
 
-		if accounts:
-			conditions.append("account in (%s)" % ','.join(['%s'] *len(accounts)))
-			values += accounts
+		row.age = (getdate(self.age_as_on) - getdate(entry_date)).days or 0
+		index = None
 
-	def add_customer_filters(self, conditions, values):
-		if self.filters.get("customer_group"):
-			conditions.append(self.get_hierarchical_filters('Customer Group', 'customer_group'))
+		if not (self.filters.range1 and self.filters.range2 and self.filters.range3 and self.filters.range4):
+			self.filters.range1, self.filters.range2, self.filters.range3, self.filters.range4 = 30, 60, 90, 120
 
-		if self.filters.get("territory"):
-			conditions.append(self.get_hierarchical_filters('Territory', 'territory'))
+		for i, days in enumerate([self.filters.range1, self.filters.range2, self.filters.range3, self.filters.range4]):
+			if cint(row.age) <= cint(days):
+				index = i
+				break
 
-		if self.filters.get("payment_terms_template"):
-			conditions.append("party in (select name from tabCustomer where payment_terms=%s)")
-			values.append(self.filters.get("payment_terms_template"))
+		if index is None: index = 4
+		row['range' + str(index+1)] = row.outstanding
 
-		if self.filters.get("sales_partner"):
-			conditions.append("party in (select name from tabCustomer where default_sales_partner=%s)")
-			values.append(self.filters.get("sales_partner"))
+	def get_gl_entries(self):
+		# get all the GL entries filtered by the given filters
 
-	def add_supplier_filters(self, conditions, values):
-		if self.filters.get("supplier_group"):
-			conditions.append("""party in (select name from tabSupplier
-				where supplier_group=%s)""")
-			values.append(self.filters.get("supplier_group"))
-
-		if self.filters.get("payment_terms_template"):
-			conditions.append("party in (select name from tabSupplier where payment_terms=%s)")
-			values.append(self.filters.get("payment_terms_template"))
-
-	def get_hierarchical_filters(self, doctype, key):
-		lft, rgt = frappe.db.get_value(doctype, self.filters.get(key), ["lft", "rgt"])
-
-		return """party in (select name from tabCustomer
-			where exists(select name from `tab{doctype}` where lft >= {lft} and rgt <= {rgt}
-				and name=tabCustomer.{key}))""".format(
-					doctype=doctype, lft=lft, rgt=rgt, key=key)
-
-	def add_accounting_dimensions_filters(self, conditions, values):
-		accounting_dimensions = get_accounting_dimensions(as_list=False)
-
-		if accounting_dimensions:
-			for dimension in accounting_dimensions:
-				if self.filters.get(dimension.fieldname):
-					if frappe.get_cached_value('DocType', dimension.document_type, 'is_tree'):
-						self.filters[dimension.fieldname] = get_dimension_with_children(dimension.document_type,
-							self.filters.get(dimension.fieldname))
-					conditions.append("{0} in %s".format(dimension.fieldname))
-					values.append(tuple(self.filters.get(dimension.fieldname)))
-
-	def get_gle_balance(self, gle):
-		# get the balance of the GL (debit - credit) or reverse balance based on report type
-		return gle.get(self.dr_or_cr) - self.get_reverse_balance(gle)
-
-	def get_reverse_balance(self, gle):
-		# get "credit" balance if report type is "debit" and vice versa
-		return gle.get('debit' if self.dr_or_cr=='credit' else 'credit')
-
-	def is_invoice(self, gle):
-		if gle.voucher_type in ('Sales Invoice', 'Purchase Invoice'):
-			return True
-
-	def get_party_details(self, party):
-		if not party in self.party_details:
-			if self.party_type == 'Customer':
-				self.party_details[party] = frappe.db.get_value('Customer', party, ['customer_name',
-					'territory', 'customer_group', 'customer_primary_contact'], as_dict=True)
-			else:
-				self.party_details[party] = frappe.db.get_value('Supplier', party, ['supplier_name',
-					'supplier_group'], as_dict=True)
-
-		return self.party_details[party]
-
-
-	def get_columns(self):
-		self.columns = []
-		self.add_column('Posting Date', fieldtype='Date')
-		self.add_column(label=_(self.party_type), fieldname='party',
-			fieldtype='Link', options=self.party_type, width=180)
-
-		if self.party_naming_by == "Naming Series":
-			self.add_column(_('{0} Name').format(self.party_type),
-				fieldname = scrub(self.party_type) + '_name', fieldtype='Data')
-
-		if self.party_type == 'Customer':
-			self.add_column(_("Customer Contact"), fieldname='customer_primary_contact',
-				fieldtype='Link', options='Contact')
-
-		self.add_column(label=_('Cost Center'), fieldname='cost_center', fieldtype='Data')
-		self.add_column(label=_('Voucher Type'), fieldname='voucher_type', fieldtype='Data')
-		self.add_column(label=_('Voucher No'), fieldname='voucher_no', fieldtype='Dynamic Link',
-			options='voucher_type', width=180)
-		self.add_column(label='Due Date', fieldtype='Date')
-
-		if self.party_type == "Supplier":
-			self.add_column(label=_('Bill No'), fieldname='bill_no', fieldtype='Data')
-			self.add_column(label=_('Bill Date'), fieldname='bill_date', fieldtype='Date')
-
-		if self.filters.based_on_payment_terms:
-			self.add_column(label=_('Payment Term'), fieldname='payment_term', fieldtype='Data')
-			self.add_column(label=_('Invoice Grand Total'), fieldname='invoice_grand_total')
-
-		self.add_column(_('Invoiced Amount'), fieldname='invoiced')
-		self.add_column(_('Paid Amount'), fieldname='paid')
-		if self.party_type == "Customer":
-			self.add_column(_('Credit Note'), fieldname='credit_note')
-		else:
-			# note: fieldname is still `credit_note`
-			self.add_column(_('Debit Note'), fieldname='credit_note')
-		self.add_column(_('Outstanding Amount'), fieldname='outstanding')
-
-		self.setup_ageing_columns()
-
-		self.add_column(label=_('Currency'), fieldname='currency', fieldtype='Link', options='Currency', width=80)
+		conditions, values = self.prepare_conditions()
+		order_by = self.get_order_by_condition()
 
 		if self.filters.show_future_payments:
-			self.add_column(label=_('Future Payment Ref'), fieldname='future_ref', fieldtype='Data')
-			self.add_column(label=_('Future Payment Amount'), fieldname='future_amount')
-			self.add_column(label=_('Remaining Balance'), fieldname='remaining_balance')
+			values.insert(2, self.filters.report_date)
 
-		if self.filters.party_type == 'Customer':
-			self.add_column(label=_('Customer LPO'), fieldname='po_no', fieldtype='Data')
+			date_condition = """AND (posting_date <= %s
+				OR (against_voucher IS NULL AND DATE(creation) <= %s))"""
+		else:
+			date_condition = "AND posting_date <=%s"
 
-			# comma separated list of linked delivery notes
-			if self.filters.show_delivery_notes:
-				self.add_column(label=_('Delivery Notes'), fieldname='delivery_notes', fieldtype='Data')
-			self.add_column(label=_('Territory'), fieldname='territory', fieldtype='Link',
-				options='Territory')
-			self.add_column(label=_('Customer Group'), fieldname='customer_group', fieldtype='Link',
-				options='Customer Group')
-			if self.filters.show_sales_person:
-				self.add_column(label=_('Sales Person'), fieldname='sales_person', fieldtype='Data')
-
-		if self.filters.party_type == "Supplier":
-			self.add_column(label=_('Supplier Group'), fieldname='supplier_group', fieldtype='Link',
-				options='Supplier Group')
-
-	def add_column(self, label, fieldname=None, fieldtype='Currency', options=None, width=120):
-		if not fieldname: fieldname = scrub(label)
-		if fieldtype=='Currency': options='currency'
-		if fieldtype=='Date': width = 90
-
-		self.columns.append(dict(
-			label=label,
-			fieldname=fieldname,
-			fieldtype=fieldtype,
-			options=options,
-			width=width
-		))
-
-	def setup_ageing_columns(self):
-		# for charts
-		self.ageing_column_labels = []
-		self.add_column(label=_('Age (Days)'), fieldname='age', fieldtype='Int', width=80)
-
-		for i, label in enumerate(["0-{range1}".format(range1=self.filters["range1"]),
-			"{range1}-{range2}".format(range1=cint(self.filters["range1"])+ 1, range2=self.filters["range2"]),
-			"{range2}-{range3}".format(range2=cint(self.filters["range2"])+ 1, range3=self.filters["range3"]),
-			"{range3}-{range4}".format(range3=cint(self.filters["range3"])+ 1, range4=self.filters["range4"]),
-			"{range4}-{above}".format(range4=cint(self.filters["range4"])+ 1, above=_("Above"))]):
-				self.add_column(label=label, fieldname='range' + str(i+1))
-				self.ageing_column_labels.append(label)
-
-	def get_chart_data(self):
-		rows = []
-		for row in self.data:
-			row = frappe._dict(row)
-			if not cint(row.bold):
-				values = [row.range1, row.range2, row.range3, row.range4, row.range5]
-				precision = cint(frappe.db.get_default("float_precision")) or 2
-				rows.append({
-					'values': [flt(val, precision) for val in values]
-				})
-
-		self.chart = {
-			"data": {
-				'labels': self.ageing_column_labels,
-				'datasets': rows
-			},
-			"type": 'percentage'
-		}
+		if self.filters.get(scrub(self.party_type)):
+			select_fields = "debit_in_account_currency as debit, credit_in_ac

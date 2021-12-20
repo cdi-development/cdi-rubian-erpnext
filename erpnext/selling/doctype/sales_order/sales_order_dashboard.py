@@ -7,7 +7,7 @@ def get_data():
 		'non_standard_fieldnames': {
 			'Delivery Note': 'against_sales_order',
 			'Journal Entry': 'reference_name',
-			'Payment Entry': 'reference_name',
+			'Collection Entry': 'reference_name',
 			'Payment Request': 'reference_name',
 			'Auto Repeat': 'reference_document',
 			'Maintenance Visit': 'prevdoc_docname'
@@ -38,7 +38,7 @@ def get_data():
 			},
 			{
 				'label': _('Payment'),
-				'items': ['Payment Entry', 'Payment Request', 'Journal Entry']
+				'items': ['Collection Entry', 'Payment Request', 'Journal Entry']
 			},
 		]
 	}
