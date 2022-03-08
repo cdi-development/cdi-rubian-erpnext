@@ -14,7 +14,7 @@ def get_data():
 			},
 			{
 				'label': _('Payment'),
-				'items': ['Payment Entry', 'Journal Entry']
+				'items': ['Payment Entry', 'Collection Entry', 'Journal Entry']
 			}
 		]
 	}

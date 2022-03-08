@@ -127,12 +127,12 @@ frappe.query_reports["Accounts Payable"] = {
 		return value;
 	},
 
-	onload: function(report) {
-		report.page.add_inner_button(__("Accounts Payable Summary"), function() {
-			var filters = report.get_values();
-			frappe.set_route('query-report', 'Accounts Payable Summary', {company: filters.company});
-		});
-	}
+	// onload: function(report) {
+	// 	report.page.add_inner_button(__("Accounts Payable Summary"), function() {
+	// 		var filters = report.get_values();
+	// 		frappe.set_route('query-report', 'Accounts Payable Summary', {company: filters.company});
+	// 	});
+	// }
 }
 
 erpnext.utils.add_dimensions('Accounts Payable', 9);

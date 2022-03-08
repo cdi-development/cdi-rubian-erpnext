@@ -6,12 +6,13 @@ def get_data():
 		'fieldname': 'dunning',
 		'non_standard_fieldnames': {
 			'Journal Entry': 'reference_name',
-			'Payment Entry': 'reference_name'
+			'Payment Entry': 'reference_name',
+			'Collection Entry': 'reference_name'
 		},
 		'transactions': [
 			{
 				'label': _('Payment'),
-				'items': ['Payment Entry', 'Journal Entry']
+				'items': ['Payment Entry', 'Collection Entry', 'Journal Entry']
 			}
 		]
 	}

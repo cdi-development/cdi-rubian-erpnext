@@ -61,6 +61,24 @@ class BankClearance(Document):
 		""".format(condition=condition), {"account": self.account, "from":self.from_date,
 				"to": self.to_date, "bank_account": self.bank_account}, as_dict=1)
 
+		collection_entries = frappe.db.sql("""
+			select
+				"Collection Entry" as collection_document, name as collection_entry,
+				reference_no as cheque_number, reference_date as cheque_date,
+				if(paid_from=%(account)s, paid_amount, 0) as credit,
+				if(paid_from=%(account)s, 0, received_amount) as debit,
+				posting_date, ifnull(party,if(paid_from=%(account)s,paid_to,paid_from)) as against_account, clearance_date,
+				if(paid_to=%(account)s, paid_to_account_currency, paid_from_account_currency) as account_currency
+			from `tabCollection Entry`
+			where
+				(paid_from=%(account)s or paid_to=%(account)s) and docstatus=1
+				and posting_date >= %(from)s and posting_date <= %(to)s
+				{condition}
+			order by
+				posting_date ASC, name DESC
+		""".format(condition=condition), {"account": self.account, "from":self.from_date,
+				"to": self.to_date, "bank_account": self.bank_account}, as_dict=1)
+
 		pos_sales_invoices, pos_purchase_invoices = [], []
 		if self.include_pos_transactions:
 			pos_sales_invoices = frappe.db.sql("""
@@ -89,7 +107,7 @@ class BankClearance(Document):
 					pi.posting_date ASC, pi.name DESC
 			""", {"account": self.account, "from": self.from_date, "to": self.to_date}, as_dict=1)
 
-		entries = sorted(list(payment_entries) + list(journal_entries + list(pos_sales_invoices) + list(pos_purchase_invoices)),
+		entries = sorted(list(payment_entries) + list(collection_entries) + list(journal_entries + list(pos_sales_invoices) + list(pos_purchase_invoices)),
 			key=lambda k: k['posting_date'] or getdate(nowdate()))
 
 		self.set('payment_entries', [])

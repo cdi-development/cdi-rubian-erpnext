@@ -381,29 +381,33 @@ def check_if_advance_entry_modified(args):
 			and t1.name = %(voucher_no)s and t2.name = %(voucher_detail_no)s
 			and t1.docstatus=1 """.format(dr_or_cr = args.get("dr_or_cr")), args)
 	else:
-		party_account_field = ("paid_from"
-			if erpnext.get_party_account_type(args.party_type) == 'Receivable' else "paid_to")
+		if args.voucher_type == 'Collection Entry':
+			party_account_field = "paid_from"
+			tbl = 'tabCollection Entry'
+		else:
+			party_account_field = "paid_to"
+			tbl = 'tabPayment Entry'
 
 		if args.voucher_detail_no:
 			ret = frappe.db.sql("""select t1.name
-				from `tabPayment Entry` t1, `tabPayment Entry Reference` t2
+				from `{1}` t1, `tabPayment Entry Reference` t2
 				where
 					t1.name = t2.parent and t1.docstatus = 1
 					and t1.name = %(voucher_no)s and t2.name = %(voucher_detail_no)s
 					and t1.party_type = %(party_type)s and t1.party = %(party)s and t1.{0} = %(account)s
 					and t2.reference_doctype in ("", "Sales Order", "Purchase Order")
 					and t2.allocated_amount = %(unadjusted_amount)s
-			""".format(party_account_field), args)
+			""".format(party_account_field, tbl), args)
 		else:
-			ret = frappe.db.sql("""select name from `tabPayment Entry`
+			ret = frappe.db.sql("""select name from `{1}`
 				where
 					name = %(voucher_no)s and docstatus = 1
 					and party_type = %(party_type)s and party = %(party)s and {0} = %(account)s
 					and unallocated_amount = %(unadjusted_amount)s
-			""".format(party_account_field), args)
+			""".format(party_account_field, tbl), args)
 
 	if not ret:
-		throw(_("""Payment Entry has been modified after you pulled it. Please pull it again."""))
+		throw(_(f"""{tbl} has been modified after you pulled it. Please pull it again."""))
 
 def validate_allocated_amount(args):
 	precision = args.get('precision') or frappe.db.get_single_value("System Settings", "currency_precision")
@@ -543,16 +547,16 @@ def remove_ref_doc_link_from_jv(ref_type, ref_no):
 		frappe.msgprint(_("Journal Entries {0} are un-linked").format("\n".join(linked_jv)))
 
 def remove_ref_doc_link_from_pe(ref_type, ref_no):
-	linked_pe = frappe.db.sql_list("""select parent from `tabPayment Entry Reference`
+	linked_per = frappe.db.sql_list("""select parent from `tabPayment Entry Reference`
 		where reference_doctype=%s and reference_name=%s and docstatus < 2""", (ref_type, ref_no))
 
-	if linked_pe:
+	if linked_per:
 		frappe.db.sql("""update `tabPayment Entry Reference`
 			set allocated_amount=0, modified=%s, modified_by=%s
 			where reference_doctype=%s and reference_name=%s
 			and docstatus < 2""", (now(), frappe.session.user, ref_type, ref_no))
 
-		for pe in linked_pe:
+		for pe in linked_per:
 			pe_doc = frappe.get_doc("Payment Entry", pe)
 			pe_doc.set_total_allocated_amount()
 			pe_doc.set_unallocated_amount()
@@ -562,6 +566,17 @@ def remove_ref_doc_link_from_pe(ref_type, ref_no):
 				base_total_allocated_amount=%s, unallocated_amount=%s, modified=%s, modified_by=%s
 				where name=%s""", (pe_doc.total_allocated_amount, pe_doc.base_total_allocated_amount,
 					pe_doc.unallocated_amount, now(), frappe.session.user, pe))
+
+		for ce in linked_pe:
+			ce_doc = frappe.get_doc("Collection Entry", ce)
+			ce_doc.set_total_allocated_amount()
+			ce_doc.set_unallocated_amount()
+			ce_doc.clear_unallocated_reference_document_rows()
+
+			frappe.db.sql("""update `tabCollection Entry` set total_allocated_amount=%s,
+				base_total_allocated_amount=%s, unallocated_amount=%s, modified=%s, modified_by=%s
+				where name=%s""", (ce_doc.total_allocated_amount, ce_doc.base_total_allocated_amount,
+					ce_doc.unallocated_amount, now(), frappe.session.user, ce))
 
 		frappe.msgprint(_("Payment Entries {0} are un-linked").format("\n".join(linked_pe)))
 
@@ -678,7 +693,7 @@ def get_outstanding_invoices(party_type, party, account, condition=None, filters
 			{condition}
 			and ((voucher_type = 'Journal Entry'
 					and (against_voucher = '' or against_voucher is null))
-				or (voucher_type not in ('Journal Entry', 'Payment Entry')))
+				or (voucher_type not in ('Journal Entry', 'Payment Entry', 'Collection Entry')))
 		group by voucher_type, voucher_no
 		order by posting_date, name""".format(
 			dr_or_cr=dr_or_cr,

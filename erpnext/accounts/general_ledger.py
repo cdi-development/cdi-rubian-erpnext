@@ -166,7 +166,7 @@ def round_off_debit_credit(gl_map):
 
 	debit_credit_diff = flt(debit_credit_diff, precision)
 
-	if gl_map[0]["voucher_type"] in ("Journal Entry", "Payment Entry"):
+	if gl_map[0]["voucher_type"] in ("Journal Entry", "Payment Entry", "Collection Entry"):
 		allowance = 5.0 / (10**precision)
 	else:
 		allowance = .5
