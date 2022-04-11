@@ -357,6 +357,7 @@ def reconcile_against_document(args):
 			update_reference_in_journal_entry(d, doc)
 		else:
 			update_reference_in_payment_entry(d, doc)
+			update_reference_in_collection_entry(d, doc)
 
 		# re-submit advance entry
 		doc = frappe.get_doc(d.voucher_type, d.voucher_no)
@@ -516,6 +517,53 @@ def update_reference_in_payment_entry(d, payment_entry, do_not_save=False):
 	if not do_not_save:
 		payment_entry.save(ignore_permissions=True)
 
+def update_reference_in_collection_entry(d, collection_entry, do_not_save=False):
+	reference_details = {
+		"reference_doctype": d.against_voucher_type,
+		"reference_name": d.against_voucher,
+		"total_amount": d.grand_total,
+		"outstanding_amount": d.outstanding_amount,
+		"allocated_amount": d.allocated_amount,
+		"exchange_rate": d.exchange_rate if not d.exchange_gain_loss else collection_entry.get_exchange_rate(),
+		"exchange_gain_loss": d.exchange_gain_loss # only populated from invoice in case of advance allocation
+	}
+
+	if d.voucher_detail_no:
+		existing_row = collection_entry.get("references", {"name": d["voucher_detail_no"]})[0]
+		original_row = existing_row.as_dict().copy()
+		existing_row.update(reference_details)
+
+		if d.allocated_amount < original_row.allocated_amount:
+			new_row = collection_entry.append("references")
+			new_row.docstatus = 1
+			for field in list(reference_details):
+				new_row.set(field, original_row[field])
+
+			new_row.allocated_amount = original_row.allocated_amount - d.allocated_amount
+	else:
+		new_row = collection_entry.append("references")
+		new_row.docstatus = 1
+		new_row.update(reference_details)
+
+	collection_entry.flags.ignore_validate_update_after_submit = True
+	collection_entry.setup_party_account_field()
+	collection_entry.set_missing_values()
+	collection_entry.set_amounts()
+
+	if d.difference_amount and d.difference_account:
+		account_details = {
+			'account': d.difference_account,
+			'cost_center': collection_entry.cost_center or frappe.get_cached_value('Company',
+				collection_entry.company, "cost_center")
+		}
+		if d.difference_amount:
+			account_details['amount'] = d.difference_amount
+
+		collection_entry.set_gain_or_loss(account_details=account_details)
+
+	if not do_not_save:
+		collection_entry.save(ignore_permissions=True)
+
 def unlink_ref_doc_from_payment_entries(ref_doc):
 	remove_ref_doc_link_from_jv(ref_doc.doctype, ref_doc.name)
 	remove_ref_doc_link_from_pe(ref_doc.doctype, ref_doc.name)
@@ -567,7 +615,7 @@ def remove_ref_doc_link_from_pe(ref_type, ref_no):
 				where name=%s""", (pe_doc.total_allocated_amount, pe_doc.base_total_allocated_amount,
 					pe_doc.unallocated_amount, now(), frappe.session.user, pe))
 
-		for ce in linked_pe:
+		for ce in linked_per:
 			ce_doc = frappe.get_doc("Collection Entry", ce)
 			ce_doc.set_total_allocated_amount()
 			ce_doc.set_unallocated_amount()
@@ -579,6 +627,7 @@ def remove_ref_doc_link_from_pe(ref_type, ref_no):
 					ce_doc.unallocated_amount, now(), frappe.session.user, ce))
 
 		frappe.msgprint(_("Payment Entries {0} are un-linked").format("\n".join(linked_pe)))
+		frappe.msgprint(_("Collection Entries {0} are un-linked").format("\n".join(linked_ce)))
 
 @frappe.whitelist()
 def get_company_default(company, fieldname):

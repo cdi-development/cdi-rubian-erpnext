@@ -57,8 +57,8 @@ erpnext.accounts.SalesInvoiceController = erpnext.selling.SellingController.exte
 
 		if (doc.docstatus == 1 && doc.outstanding_amount!=0
 			&& !(cint(doc.is_return) && doc.return_against)) {
-			cur_frm.add_custom_button(__('Payment'),
-				this.make_payment_entry, __('Create'));
+			cur_frm.add_custom_button(__('Collection'),
+				this.make_collection_entry, __('Create'));
 			cur_frm.page.set_inner_btn_group_as_primary(__('Create'));
 		}
 
@@ -366,6 +366,13 @@ erpnext.accounts.SalesInvoiceController = erpnext.selling.SellingController.exte
 	make_sales_return: function() {
 		frappe.model.open_mapped_doc({
 			method: "erpnext.accounts.doctype.sales_invoice.sales_invoice.make_sales_return",
+			frm: cur_frm
+		})
+	},
+
+	make_collection_entry: function() {
+		frappe.model.open_mapped_doc({
+			method: "rubian.rubian.overrides.sales_invoice.make_collection_entry",
 			frm: cur_frm
 		})
 	},

@@ -10,7 +10,7 @@ from frappe.model.document import Document
 from frappe.utils import flt, nowdate, get_url
 from erpnext.accounts.party import get_party_account, get_party_bank_account
 from erpnext.accounts.utils import get_account_currency
-from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry, get_company_defaults
+from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry, get_collection_entry, get_company_defaults
 from frappe.integrations.utils import get_payment_gateway_controller
 from frappe.utils.background_jobs import enqueue
 from erpnext.erpnext_integrations.stripe_integration import create_stripe_subscription
@@ -229,6 +229,52 @@ class PaymentRequest(Document):
 			payment_entry.submit()
 
 		return payment_entry
+
+	def create_collection_entry(self, submit=True):
+		"""create entry"""
+		frappe.flags.ignore_account_permission = True
+
+		ref_doc = frappe.get_doc(self.reference_doctype, self.reference_name)
+
+		if self.reference_doctype in ["Sales Invoice", "POS Invoice"]:
+			party_account = ref_doc.debit_to
+		elif self.reference_doctype == "Purchase Invoice":
+			party_account = ref_doc.credit_to
+		else:
+			party_account = get_party_account("Customer", ref_doc.get("customer"), ref_doc.company)
+
+		party_account_currency = ref_doc.get("party_account_currency") or get_account_currency(party_account)
+
+		bank_amount = self.grand_total
+		if party_account_currency == ref_doc.company_currency and party_account_currency != self.currency:
+			party_amount = ref_doc.base_grand_total
+		else:
+			party_amount = self.grand_total
+
+		collection_entry = get_collection_entry(self.reference_doctype, self.reference_name, party_amount=party_amount,
+			bank_account=self.payment_account, bank_amount=bank_amount)
+
+		collection_entry.update({
+			"reference_no": self.name,
+			"reference_date": nowdate(),
+			"remarks": "Payment Entry against {0} {1} via Payment Request {2}".format(self.reference_doctype,
+				self.reference_name, self.name)
+		})
+
+		if collection_entry.difference_amount:
+			company_details = get_company_defaults(ref_doc.company)
+
+			collection_entry.append("deductions", {
+				"account": company_details.exchange_gain_loss_account,
+				"cost_center": company_details.cost_center,
+				"amount": collection_entry.difference_amount
+			})
+
+		if submit:
+			collection_entry.insert(ignore_permissions=True)
+			collection_entry.submit()
+
+		return collection_entry
 
 	def send_email(self):
 		"""send email with payment link"""
@@ -467,6 +513,11 @@ def resend_payment_email(docname):
 def make_payment_entry(docname):
 	doc = frappe.get_doc("Payment Request", docname)
 	return doc.create_payment_entry(submit=False).as_dict()
+
+@frappe.whitelist()
+def make_collection_entry(docname):
+	doc = frappe.get_doc("Payment Request", docname)
+	return doc.create_collection_entry(submit=False).as_dict()
 
 def update_payment_req_status(doc, method):
 	from erpnext.accounts.doctype.payment_entry.payment_entry import get_reference_details
