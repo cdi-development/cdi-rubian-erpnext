@@ -47,6 +47,12 @@ def get_columns():
 			"width": 100
 		},
 		{
+			"label": _("Release Date"),
+			"fieldname": "date_released",
+			"fieldtype": "Date",
+			"width": 100
+		},
+		{
 			"label": _("Against Account"),
 			"fieldname": "against",
 			"fieldtype": "Link",
@@ -56,6 +62,7 @@ def get_columns():
 		{
 			"label": _("Amount"),
 			"fieldname": "amount",
+			"fieldtype": "Currency",
 			"width": 120
 		}]
 
@@ -72,7 +79,7 @@ def get_conditions(filters):
 def get_entries(filters):
 	conditions = get_conditions(filters)
 	journal_entries =  frappe.db.sql("""SELECT
-			"Journal Entry", jv.name, jv.posting_date, jv.cheque_no,
+			"Journal Entry", jv.name, jv.posting_date, jv.cheque_no, jv.date_released,
 			jv.clearance_date, jvd.against_account, jvd.debit - jvd.credit
 		FROM 
 			`tabJournal Entry Account` jvd, `tabJournal Entry` jv
@@ -81,7 +88,8 @@ def get_entries(filters):
 			order by posting_date DESC, jv.name DESC""".format(conditions), filters, as_list=1)
 
 	payment_entries =  frappe.db.sql("""SELECT
-			"Payment Entry", name, posting_date, reference_no, clearance_date, party, 
+			"Payment Entry", name, posting_date, reference_no, clearance_date, 
+			date_released, party, 
 			if(paid_from=%(account)s, paid_amount * -1, received_amount)
 		FROM 
 			`tabPayment Entry`
@@ -89,4 +97,14 @@ def get_entries(filters):
 			docstatus=1 and (paid_from = %(account)s or paid_to = %(account)s) {0}
 			order by posting_date DESC, name DESC""".format(conditions), filters, as_list=1)
 
-	return sorted(journal_entries + payment_entries, key=lambda k: k[2] or getdate(nowdate()))
+	collection_entries =  frappe.db.sql("""SELECT
+			"Collection Entry", name, posting_date, reference_no, clearance_date, 
+			date_released, party, 
+			if(paid_from=%(account)s, paid_amount * -1, received_amount)
+		FROM 
+			`tabCollection Entry`
+		WHERE 
+			docstatus=1 and (paid_from = %(account)s or paid_to = %(account)s) {0}
+			order by posting_date DESC, name DESC""".format(conditions), filters, as_list=1)
+
+	return sorted(journal_entries + payment_entries + collection_entries, key=lambda k: k[2] or getdate(nowdate()))

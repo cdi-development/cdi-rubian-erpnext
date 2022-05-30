@@ -44,7 +44,7 @@ class BankTransaction(StatusUpdater):
 
 	def clear_linked_payment_entries(self):
 		for payment_entry in self.payment_entries:
-			if payment_entry.payment_document in ["Payment Entry", "Journal Entry", "Purchase Invoice", "Expense Claim"]:
+			if payment_entry.payment_document in ["Payment Entry", "Collection Entry", "Journal Entry", "Purchase Invoice", "Expense Claim"]:
 				self.clear_simple_entry(payment_entry)
 
 			elif payment_entry.payment_document == "Sales Invoice":
@@ -74,11 +74,11 @@ def get_total_allocated_amount(payment_entry):
 			bt.docstatus = 1""", (payment_entry.payment_document, payment_entry.payment_entry), as_dict=True)
 
 def get_paid_amount(payment_entry, currency):
-	if payment_entry.payment_document in ["Payment Entry", "Sales Invoice", "Purchase Invoice"]:
+	if payment_entry.payment_document in ["Payment Entry", "Collection Entry", "Sales Invoice", "Purchase Invoice"]:
 
 		paid_amount_field = "paid_amount"
-		if payment_entry.payment_document == 'Payment Entry':
-			doc = frappe.get_doc("Payment Entry", payment_entry.payment_entry)
+		if payment_entry.payment_document in ('Payment Entry', 'Collection Entry'):
+			doc = frappe.get_doc(payment_entry.payment_document, payment_entry.payment_entry)
 			paid_amount_field = ("base_paid_amount"
 				if doc.paid_to_account_currency == currency else "paid_amount")
 

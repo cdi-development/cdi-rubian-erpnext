@@ -10,6 +10,7 @@ frappe.ui.form.on("Bank Transaction", {
 						"in",
 						[
 							"Payment Entry",
+							"Collection Entry",
 							"Journal Entry",
 							"Sales Invoice",
 							"Purchase Invoice",

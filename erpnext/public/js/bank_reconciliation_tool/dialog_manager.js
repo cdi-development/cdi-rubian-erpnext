@@ -428,6 +428,11 @@ erpnext.accounts.bank_reconciliation.DialogManager = class DialogManager {
 			this.add_payment_entry(values);
 		if (
 			values.action == "Create Voucher" &&
+			values.document_type == "Collection Entry"
+		)
+			this.add_collection_entry(values);
+		if (
+			values.action == "Create Voucher" &&
 			values.document_type == "Journal Entry"
 		)
 			this.add_journal_entry(values);
@@ -472,6 +477,33 @@ erpnext.accounts.bank_reconciliation.DialogManager = class DialogManager {
 		frappe.call({
 			method:
 				"erpnext.accounts.doctype.bank_reconciliation_tool.bank_reconciliation_tool.create_payment_entry_bts",
+			args: {
+				bank_transaction_name: this.bank_transaction.name,
+				reference_number: values.reference_number,
+				reference_date: values.reference_date,
+				party_type: values.party_type,
+				party: values.party,
+				posting_date: values.posting_date,
+				mode_of_payment: values.mode_of_payment,
+				project: values.project,
+				cost_center: values.cost_center,
+			},
+			callback: (response) => {
+				const alert_string =
+					"Bank Transaction " +
+					this.bank_transaction.name +
+					" added as Payment Entry";
+				frappe.show_alert(alert_string);
+				this.update_dt_cards(response.message);
+				this.dialog.hide();
+			},
+		});
+	}
+
+	add_collection_entry(values) {
+		frappe.call({
+			method:
+				"erpnext.accounts.doctype.bank_reconciliation_tool.bank_reconciliation_tool.create_collection_entry_bts",
 			args: {
 				bank_transaction_name: this.bank_transaction.name,
 				reference_number: values.reference_number,

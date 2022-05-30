@@ -22,7 +22,8 @@ class BankClearance(Document):
 
 		condition = ""
 		if not self.include_reconciled_entries:
-			condition = "and (clearance_date IS NULL or clearance_date='0000-00-00')"
+			condition = "and ((clearance_date IS NULL or clearance_date='0000-00-00')"
+			condition += " or (date_released IS NULL or date_released='0000-00-00'))"
 
 		journal_entries = frappe.db.sql("""
 			select
@@ -49,7 +50,8 @@ class BankClearance(Document):
 				reference_no as cheque_number, reference_date as cheque_date,
 				if(paid_from=%(account)s, paid_amount, 0) as credit,
 				if(paid_from=%(account)s, 0, received_amount) as debit,
-				posting_date, ifnull(party,if(paid_from=%(account)s,paid_to,paid_from)) as against_account, clearance_date,
+				posting_date, ifnull(party,if(paid_from=%(account)s,paid_to,paid_from)) as against_account, 
+				clearance_date, date_released,
 				if(paid_to=%(account)s, paid_to_account_currency, paid_from_account_currency) as account_currency
 			from `tabPayment Entry`
 			where
@@ -59,15 +61,16 @@ class BankClearance(Document):
 			order by
 				posting_date ASC, name DESC
 		""".format(condition=condition), {"account": self.account, "from":self.from_date,
-				"to": self.to_date, "bank_account": self.bank_account}, as_dict=1)
+				"to": self.to_date, "bank_account": self.bank_account}, as_dict=1, debug=True)
 
 		collection_entries = frappe.db.sql("""
 			select
-				"Collection Entry" as collection_document, name as collection_entry,
+				"Collection Entry" as payment_document, name as payment_entry,
 				reference_no as cheque_number, reference_date as cheque_date,
 				if(paid_from=%(account)s, paid_amount, 0) as credit,
 				if(paid_from=%(account)s, 0, received_amount) as debit,
-				posting_date, ifnull(party,if(paid_from=%(account)s,paid_to,paid_from)) as against_account, clearance_date,
+				posting_date, ifnull(party,if(paid_from=%(account)s,paid_to,paid_from)) as against_account,
+				clearance_date, date_released,
 				if(paid_to=%(account)s, paid_to_account_currency, paid_from_account_currency) as account_currency
 			from `tabCollection Entry`
 			where
@@ -130,8 +133,9 @@ class BankClearance(Document):
 	@frappe.whitelist()
 	def update_clearance_date(self):
 		clearance_date_updated = False
+		date_released_updated = False
 		for d in self.get('payment_entries'):
-			if d.clearance_date:
+			if d.clearance_date or d.date_released:
 				if not d.payment_document:
 					frappe.throw(_("Row #{0}: Payment document is required to complete the transaction"))
 
@@ -139,17 +143,26 @@ class BankClearance(Document):
 					frappe.throw(_("Row #{0}: Clearance date {1} cannot be before Cheque Date {2}")
 						.format(d.idx, d.clearance_date, d.cheque_date))
 
-			if d.clearance_date or self.include_reconciled_entries:
+				if d.cheque_date and getdate(d.date_released) < getdate(d.cheque_date):
+					frappe.throw(_("Row #{0}: Release Date {1} cannot be before Cheque Date {2}")
+						.format(d.idx, d.clearance_date, d.cheque_date))
+
+			if d.clearance_date or d.date_released or self.include_reconciled_entries:
 				if not d.clearance_date:
 					d.clearance_date = None
 
+				if not d.date_released:
+					d.date_released = None
+
 				payment_entry = frappe.get_doc(d.payment_document, d.payment_entry)
 				payment_entry.db_set('clearance_date', d.clearance_date)
+				payment_entry.db_set('date_released', d.date_released)
 
 				clearance_date_updated = True
+				date_released_updated = True
 
-		if clearance_date_updated:
+		if clearance_date_updated or date_released_updated:
 			self.get_payment_entries()
-			msgprint(_("Clearance Date updated"))
+			msgprint(_("Clearance / Release Date updated"))
 		else:
-			msgprint(_("Clearance Date not mentioned"))
+			msgprint(_("Clearance / Release Date not mentioned"))

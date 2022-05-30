@@ -237,7 +237,9 @@ frappe.ui.form.on("Bank Statement Import", {
 					"date",
 					"deposit",
 					"withdrawal",
+					"balance",
 					"description",
+					"narrative",
 					"reference_number",
 					"bank_account"
 				],

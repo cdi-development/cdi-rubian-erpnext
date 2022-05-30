@@ -212,6 +212,59 @@ def create_payment_entry_bts( bank_transaction_name, reference_number=None, refe
 	return reconcile_vouchers(bank_transaction.name, vouchers)
 
 @frappe.whitelist()
+def create_collection_entry_bts( bank_transaction_name, reference_number=None, reference_date=None, party_type=None, party=None, posting_date=None,
+	mode_of_payment=None, project=None, cost_center=None, allow_edit=None):
+	# Create a new payment entry based on the bank transaction
+	bank_transaction = frappe.db.get_values(
+		"Bank Transaction", bank_transaction_name,
+		fieldname=["name", "unallocated_amount", "deposit", "bank_account"] ,
+		as_dict=True
+	)[0]
+	paid_amount = bank_transaction.unallocated_amount
+	payment_type = "Receive" if bank_transaction.deposit > 0 else "Pay"
+
+	company_account = frappe.get_value("Bank Account", bank_transaction.bank_account, "account")
+	company = frappe.get_value("Account", company_account, "company")
+	collection_entry_dict = {
+		"company" : company,
+		"payment_type" : payment_type,
+		"reference_no" :  reference_number,
+		"reference_date" :  reference_date,
+		"party_type" :  party_type,
+		"party" :  party,
+		"posting_date" :  posting_date,
+		"paid_amount": paid_amount,
+		"received_amount": paid_amount
+	}
+	collection_entry = frappe.new_doc("Collection Entry")
+	collection_entry.update(collection_entry_dict)
+
+	if mode_of_payment:
+		collection_entry.mode_of_payment =  mode_of_payment
+	if project:
+		collection_entry.project =  project
+	if cost_center:
+		collection_entry.cost_center =  cost_center
+	if payment_type == "Receive":
+		collection_entry.paid_to = company_account
+	else:
+		collection_entry.paid_from = company_account
+
+	collection_entry.validate()
+
+	if allow_edit:
+		return collection_entry
+
+	collection_entry.insert()
+
+	collection_entry.submit()
+	vouchers = json.dumps([{
+		"payment_doctype":"Collection Entry",
+		"payment_name":collection_entry.name,
+		"amount":paid_amount}])
+	return reconcile_vouchers(bank_transaction.name, vouchers)
+
+@frappe.whitelist()
 def reconcile_vouchers(bank_transaction_name, vouchers):
 	# updated clear date of all the vouchers based on the bank transaction
 	vouchers = json.loads(vouchers)
